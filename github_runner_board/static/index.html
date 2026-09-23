@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub Runner Board</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f6f7f9; --surface: #fff; --ink: #17202a; --muted: #68727d; --line: #dce1e6; --blue: #3178c6; --purple: #8b5cf6; --green: #2f9e67; --amber: #bd7a16; --red: #c84b4b; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #11161b; --surface: #1b2229; --ink: #eef2f5; --muted: #a2adb8; --line: #35404a; --blue: #70a9e8; --purple: #ae91ff; --green: #63c890; --amber: #e2ac56; --red: #ef8383; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
+    header { display: flex; justify-content: space-between; gap: 16px; align-items: end; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 25px; letter-spacing: -.02em; }
+    h2 { font-size: 17px; margin: 0 0 12px; }
+    .subtitle, .muted { color: var(--muted); }
+    .subtitle { margin: 4px 0 0; font-size: 13px; }
+    .refresh { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; }
+    .refresh.stale { color: var(--red); }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .stat-label { color: var(--muted); font-size: 12px; }
+    .stat-value { font-size: 23px; font-weight: 600; margin-top: 2px; }
+    .board { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    .timeline-wrap { overflow-x: auto; }
+    .timeline { min-width: calc(156px + var(--track-width)); }
+    .axis, .row { display: grid; grid-template-columns: 156px var(--track-width); }
+    .axis { border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .axis-label { position: sticky; left: 0; z-index: 5; background: var(--surface); padding: 10px 12px; }
+    .axis-track { position: relative; height: 34px; }
+    .tick { position: absolute; top: 8px; transform: translateX(-50%); white-space: nowrap; }
+    .row { min-height: 76px; border-bottom: 1px solid var(--line); }
+    .row:last-child { border-bottom: 0; }
+    .runner { position: sticky; left: 0; z-index: 4; background: var(--surface); padding: 12px; border-right: 1px solid var(--line); }
+    .runner-name { font-weight: 600; overflow-wrap: anywhere; }
+    .runner-status { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .runner-status.online { color: var(--green); }
+    .runner-status.offline { color: var(--red); }
+    .track { position: relative; min-height: 76px; background-image: linear-gradient(to right, transparent calc(25% - 1px), var(--line) 25%, transparent calc(25% + 1px), transparent calc(50% - 1px), var(--line) 50%, transparent calc(50% + 1px), transparent calc(75% - 1px), var(--line) 75%, transparent calc(75% + 1px)); }
+    .now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); opacity: .75; z-index: 2; }
+    .job { position: absolute; top: 12px; min-width: 96px; height: 52px; border-radius: 7px; padding: 6px 8px; color: #fff; overflow: hidden; text-decoration: none; z-index: 3; }
+    .job.active { background: var(--blue); }
+    .job.forecast { background: var(--purple); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.15) 0 6px, transparent 6px 12px); }
+    .job.unknown { background: var(--amber); }
+    .job.blocked { background: var(--red); }
+    .job-title { display: block; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+    .job-meta { display: block; font-size: 11px; opacity: .9; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+    .empty { padding: 22px 16px; color: var(--muted); }
+    .queue { margin-top: 18px; }
+    .queue-list { display: grid; gap: 8px; }
+    .queue-item { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--purple); border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; gap: 10px; color: var(--ink); text-decoration: none; }
+    .queue-item:hover { border-color: var(--purple); }
+    .queue-item.blocked { border-left-color: var(--red); }
+    .queue-title { font-weight: 600; }
+    .queue-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .queue-estimate { text-align: right; white-space: nowrap; font-size: 12px; }
+    .error { color: var(--red); background: color-mix(in srgb, var(--red) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line)); padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; }
+    @media (max-width: 620px) { main { padding: 16px 10px 28px; } header { align-items: start; flex-direction: column; gap: 4px; } .refresh { text-align: left; } .stats { grid-template-columns: repeat(2, 1fr); } .stat { padding: 10px; } .stat-value { font-size: 20px; } .queue-item { display: block; } .queue-estimate { text-align: left; margin-top: 6px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Runner Board</h1><p class="subtitle" id="repository">Connecting…</p></div>
+    <div class="refresh" id="refresh">Waiting for collector…</div>
+  </header>
+  <div id="error" hidden></div>
+  <section class="stats" aria-label="Runner summary">
+    <div class="stat"><div class="stat-label">Runners online</div><div class="stat-value" id="online">—</div></div>
+    <div class="stat"><div class="stat-label">Busy now</div><div class="stat-value" id="busy">—</div></div>
+    <div class="stat"><div class="stat-label">Queued jobs</div><div class="stat-value" id="queued">—</div></div>
+    <div class="stat"><div class="stat-label">Oldest wait</div><div class="stat-value" id="oldest">—</div></div>
+  </section>
+  <section class="board" aria-label="Runner timeline"><div id="timeline"></div></section>
+  <section class="queue"><h2>Queue</h2><div class="queue-list" id="queue-list"></div></section>
+</main>
+<script>
+  const state = { data: null };
+  const $ = (id) => document.getElementById(id);
+  const date = (value) => value ? new Date(value) : null;
+  const minutes = (seconds) => { if (seconds == null) return "—"; if (seconds < 60) return `${Math.round(seconds)}s`; return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`; };
+  const clock = (value) => value ? date(value).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "unknown";
+  const escapeHtml = (text) => String(text ?? "").replace(/[&<>'"]/g, (character) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[character]));
+  const githubLink = (job) => job.htmlUrl ? ` href="${escapeHtml(job.htmlUrl)}" data-github-url="${escapeHtml(job.htmlUrl)}"` : "";
+  function openGithub(event) {
+    const anchor = event.target.closest("[data-github-url]");
+    if (!anchor || !/Android/i.test(navigator.userAgent)) return;
+    const url = new URL(anchor.dataset.githubUrl);
+    if (url.hostname !== "github.com" && !url.hostname.endsWith(".github.com")) return;
+    event.preventDefault();
+    const fallback = encodeURIComponent(url.href);
+    window.location.href = `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=https;package=com.github.android;S.browser_fallback_url=${fallback};end`;
+  }
+  document.addEventListener("click", openGithub);
+  function render(data) {
+    state.data = data;
+    const runners = data.runners || [], jobs = data.jobs || [];
+    const queued = jobs.filter((job) => !job.runner);
+    $("repository").textContent = data.repository || "GitHub Actions";
+    $("online").textContent = runners.filter((runner) => runner.status === "online").length;
+    $("busy").textContent = runners.filter((runner) => runner.busy).length;
+    $("queued").textContent = queued.length;
+    const oldest = queued.reduce((max, job) => Math.max(max, job.queueSeconds || 0), 0);
+    $("oldest").textContent = oldest ? minutes(oldest) : "—";
+    const captured = date(data.capturedAt);
+    const stale = captured && Date.now() - captured.getTime() > 90 * 1000;
+    $("refresh").classList.toggle("stale", stale);
+    $("refresh").textContent = captured ? `Collected ${captured.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}${stale ? ` · stale ${minutes(Date.now() / 1000 - captured.getTime() / 1000)}` : " · updates in background"}` : "Collector has not completed yet";
+    const error = data.collector?.error;
+    $("error").hidden = !error;
+    $("error").textContent = error ? `Collector warning: ${error}` : "";
+    renderTimeline(data);
+    renderQueue(queued);
+  }
+  function renderTimeline(data) {
+    const now = Date.now();
+    const plannedStarts = (data.jobs || []).map((job) => date(job.runner ? job.startedAt : job.predictedStartAt)?.getTime()).filter(Number.isFinite);
+    const plannedEnds = (data.jobs || []).map((job) => date(job.predictedEndAt)?.getTime()).filter(Number.isFinite);
+    const start = Math.min(now - 15 * 60 * 1000, ...plannedStarts);
+    const end = plannedEnds.length ? Math.max(now, ...plannedEnds) : now + 15 * 60 * 1000;
+    const span = Math.max(15 * 60 * 1000, end - start);
+    const trackWidth = Math.max(600, Math.min(1800, span / 60000 * 8));
+    const pct = (value) => Math.max(0, Math.min(100, (value - start) / span * 100));
+    const ticks = Array.from({length: 5}, (_, index) => start + span * index / 4);
+    const jobsByLane = new Map((data.lanes || []).map((lane) => [lane.id, []]));
+    for (const job of data.jobs || []) jobsByLane.get(job.assignedRunner || "unassigned")?.push(job);
+    const tickMarkup = ticks.map((tick) => `<span class="tick" style="left:${pct(tick)}%">${new Date(tick).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>`).join("");
+    let markup = `<div class="timeline-wrap"><div class="timeline" style="--track-width:${trackWidth}px"><div class="axis"><div class="axis-label">Now ${clock(now)} · end ${clock(end)}</div><div class="axis-track">${tickMarkup}</div></div>`;
+    for (const lane of data.lanes || []) {
+      const runner = (data.runners || []).find((item) => item.name === lane.id);
+      const laneJobs = jobsByLane.get(lane.id) || [];
+      const status = runner ? (runner.status === "online" ? (runner.busy ? "busy" : "idle") : runner.status) : "waiting";
+      const statusClass = runner?.status === "online" ? "online" : "offline";
+      const blocks = laneJobs.map((job) => {
+        const startAt = date(job.runner ? job.startedAt : job.predictedStartAt)?.getTime();
+        const endAt = date(job.runner ? job.predictedEndAt : job.predictedEndAt)?.getTime() || (startAt ? startAt + 15 * 60 * 1000 : 0);
+        if (!startAt) return "";
+        const kind = job.predictionConfidence === "blocked" ? "blocked" : job.runner ? "active" : job.predictionConfidence === "unknown" ? "unknown" : "forecast";
+        const left = pct(startAt) / 100 * trackWidth;
+        const width = Math.max(96, (pct(endAt) - pct(startAt)) / 100 * trackWidth);
+        const detail = job.runner ? `${minutes(job.elapsedSeconds)} elapsed` : job.estimate?.sampleSize ? `p90 ${minutes(job.estimate.p90Seconds)}` : "default 15m estimate";
+        return `<a class="job ${kind}"${githubLink(job)} style="left:${left}px;width:${width}px" title="${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}"><span class="job-title">${escapeHtml(job.workflow)}</span><span class="job-meta">${escapeHtml(job.name)} · ${escapeHtml(detail)}</span></a>`;
+      }).join("");
+      markup += `<div class="row"><div class="runner"><div class="runner-name">${escapeHtml(lane.label)}</div><div class="runner-status ${statusClass}">${escapeHtml(status)}</div></div><div class="track"><div class="now" style="left:${pct(now)}%" aria-hidden="true"></div>${blocks || "<div class=\"empty\">No active work</div>"}</div></div>`;
+    }
+    if (!(data.lanes || []).length) markup += `<div class="empty">No runners returned yet.</div>`;
+    markup += "</div></div>";
+    $("timeline").innerHTML = markup;
+    const timelineWrap = $("timeline").querySelector(".timeline-wrap");
+    const visibleTrackWidth = Math.max(0, timelineWrap.clientWidth - 156);
+    const nowOffset = pct(now) / 100 * trackWidth;
+    timelineWrap.scrollLeft = Math.max(0, nowOffset - visibleTrackWidth * 0.35);
+  }
+  function renderQueue(jobs) {
+    if (!jobs.length) { $("queue-list").innerHTML = "<div class=\"muted\">Nothing is waiting for a runner.</div>"; return; }
+    $("queue-list").innerHTML = jobs.map((job) => {
+      const blocked = job.predictionConfidence === "blocked";
+      const estimate = blocked ? job.blockedReason : job.predictedStartAt ? `Likely start ${clock(job.predictedStartAt)}${job.estimate?.sampleSize ? ` · p90 ${minutes(job.estimate.p90Seconds)}` : " · no history"}` : job.queueReason || "Start unknown";
+      const source = job.pullRequestNumber ? `PR #${job.pullRequestNumber}` : job.headBranch || "unknown branch";
+      return `<a class="queue-item ${blocked ? "blocked" : ""}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · waiting ${minutes(job.queueSeconds)} · ${escapeHtml((job.labels || []).join(", ") || "runner labels unavailable")}</div></div><div class="queue-estimate">${escapeHtml(estimate)}</div></a>`;
+    }).join("");
+  }
+  let refreshInFlight = false;
+  async function load() {
+    if (refreshInFlight) return;
+    refreshInFlight = true;
+    try {
+      const response = await fetch(`/api/state?since=${Date.now()}`, {cache: "no-store"});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      render(await response.json());
+    } catch (error) {
+      $("refresh").classList.add("stale");
+      $("refresh").textContent = "Refresh failed; showing last data";
+      $("error").hidden = false;
+      $("error").textContent = `Dashboard connection error: ${error.message}`;
+    } finally {
+      refreshInFlight = false;
+    }
+  }
+  const refreshWhenVisible = () => { if (document.visibilityState === "visible") load(); };
+  document.addEventListener("visibilitychange", refreshWhenVisible);
+  window.addEventListener("focus", load);
+  window.addEventListener("pageshow", load);
+  load();
+  setInterval(refreshWhenVisible, 15000);
+</script>
+</body>
+</html>
