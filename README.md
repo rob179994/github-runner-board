@@ -76,6 +76,7 @@ Other service managers can run the equivalent `runner-board serve` command.
 ## What it shows
 
 - online, busy and offline self-hosted runners;
+- live queue metrics plus completed-run count, total runner time, and average duration for the previous 24 hours;
 - active, queued, pending and waiting jobs;
 - queued, active and completed-action sections;
 - per-runner timeline with a live current-time marker, a 5-minute default grid, round zoom ranges from 1 minute to 6 hours, and a scrollable 24-hour history window;

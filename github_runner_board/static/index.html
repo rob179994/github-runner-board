@@ -17,7 +17,7 @@
     .subtitle { margin: 4px 0 0; font-size: 13px; }
     .refresh { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; }
     .refresh.stale { color: var(--red); }
-    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 18px; }
     .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
     .stat-label { color: var(--muted); font-size: 12px; }
     .stat-value { font-size: 23px; font-weight: 600; margin-top: 2px; }
@@ -80,6 +80,9 @@
     <div class="stat"><div class="stat-label">Busy now</div><div class="stat-value" id="busy">—</div></div>
     <div class="stat"><div class="stat-label">Queued jobs</div><div class="stat-value" id="queued">—</div></div>
     <div class="stat"><div class="stat-label">Oldest wait</div><div class="stat-value" id="oldest">—</div></div>
+    <div class="stat"><div class="stat-label">Runs completed · 24h</div><div class="stat-value" id="completed-runs">—</div></div>
+    <div class="stat"><div class="stat-label">Runner time · 24h</div><div class="stat-value" id="runner-time">—</div></div>
+    <div class="stat"><div class="stat-label">Average duration · 24h</div><div class="stat-value" id="average-duration">—</div></div>
   </section>
   <section class="board" aria-label="Runner timeline"><div id="timeline"></div></section>
   <section class="job-section"><h2>Queue</h2><div class="queue-list" id="queue-list"></div></section>
@@ -111,6 +114,15 @@
   const $ = (id) => document.getElementById(id);
   const date = (value) => value ? new Date(value) : null;
   const minutes = (seconds) => { if (seconds == null) return "—"; if (seconds < 60) return `${Math.round(seconds)}s`; return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`; };
+  const duration = (seconds) => {
+    if (!Number.isFinite(seconds)) return "—";
+    const totalMinutes = Math.round(seconds / 60);
+    if (totalMinutes < 1) return `${Math.round(seconds)}s`;
+    if (totalMinutes < 60) return `${totalMinutes}m`;
+    const hours = Math.floor(totalMinutes / 60);
+    const remainingMinutes = totalMinutes % 60;
+    return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  };
   const clock = (value) => value ? date(value).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "unknown";
   const shortDate = (value) => value ? date(value).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "unknown";
   const jobSource = (job) => job.pullRequestNumber ? `PR #${job.pullRequestNumber}${job.headBranch ? ` · ${job.headBranch}` : " · merged PR"}` : job.headBranch || job.runDisplayTitle || (job.event === "push" ? "default branch" : "unknown branch");
@@ -137,6 +149,10 @@
     $("queued").textContent = queued.length;
     const oldest = queued.reduce((max, job) => Math.max(max, job.queueSeconds || 0), 0);
     $("oldest").textContent = oldest ? minutes(oldest) : "—";
+    const totalRuntime = history.reduce((total, job) => total + (Number(job.durationSeconds) || 0), 0);
+    $("completed-runs").textContent = history.length;
+    $("runner-time").textContent = duration(totalRuntime);
+    $("average-duration").textContent = history.length ? duration(totalRuntime / history.length) : "—";
     updateRefresh(data);
     const error = data.collector?.error;
     $("error").hidden = !error;
