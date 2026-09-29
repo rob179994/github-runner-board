@@ -338,16 +338,30 @@
       return `<a class="queue-item" data-job-id="${escapeHtml(job.id)}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · ${escapeHtml(runner)} · ${escapeHtml(completed)}</div></div><div class="queue-estimate">${escapeHtml(minutes(job.durationSeconds))}</div></a>`;
     }).join("");
   }
+  let jobHighlightsBound = false;
   function bindJobHighlights() {
-    const elements = [...document.querySelectorAll("[data-job-id]")];
-    const matching = (jobId) => elements.filter((element) => element.dataset.jobId === jobId);
-    const setHighlight = (jobId, highlighted) => matching(jobId).forEach((element) => element.classList.toggle("highlight", highlighted));
-    elements.forEach((element) => {
-      const jobId = element.dataset.jobId;
-      element.addEventListener("mouseenter", () => setHighlight(jobId, true));
-      element.addEventListener("mouseleave", () => setHighlight(jobId, false));
-      element.addEventListener("focus", () => setHighlight(jobId, true));
-      element.addEventListener("blur", () => setHighlight(jobId, false));
+    if (jobHighlightsBound) return;
+    jobHighlightsBound = true;
+    const setHighlight = (jobId, highlighted) => [...document.querySelectorAll("[data-job-id]")]
+      .filter((element) => element.dataset.jobId === jobId)
+      .forEach((element) => element.classList.toggle("highlight", highlighted));
+    document.addEventListener("mouseover", (event) => {
+      const element = event.target.closest?.("[data-job-id]");
+      if (!element || element.contains(event.relatedTarget)) return;
+      setHighlight(element.dataset.jobId, true);
+    });
+    document.addEventListener("mouseout", (event) => {
+      const element = event.target.closest?.("[data-job-id]");
+      if (!element || element.contains(event.relatedTarget)) return;
+      setHighlight(element.dataset.jobId, false);
+    });
+    document.addEventListener("focusin", (event) => {
+      const element = event.target.closest?.("[data-job-id]");
+      if (element) setHighlight(element.dataset.jobId, true);
+    });
+    document.addEventListener("focusout", (event) => {
+      const element = event.target.closest?.("[data-job-id]");
+      if (element && !element.contains(event.relatedTarget)) setHighlight(element.dataset.jobId, false);
     });
   }
   let refreshInFlight = false;
