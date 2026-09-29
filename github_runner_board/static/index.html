@@ -22,6 +22,11 @@
     .stat-label { color: var(--muted); font-size: 12px; }
     .stat-value { font-size: 23px; font-weight: 600; margin-top: 2px; }
     .board { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    .timeline-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .timeline-controls { display: flex; align-items: center; gap: 6px; }
+    .timeline-controls button { border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); padding: 3px 8px; cursor: pointer; }
+    .timeline-controls button:hover, .timeline-controls button:focus-visible { border-color: var(--purple); }
+    .zoom-label { min-width: 58px; text-align: center; }
     .timeline-wrap { overflow-x: auto; }
     .timeline { min-width: calc(156px + var(--track-width)); }
     .axis, .row { display: grid; grid-template-columns: 156px var(--track-width); }
@@ -38,11 +43,13 @@
     .runner-status.offline { color: var(--red); }
     .track { position: relative; min-height: 76px; background-image: linear-gradient(to right, transparent calc(25% - 1px), var(--line) 25%, transparent calc(25% + 1px), transparent calc(50% - 1px), var(--line) 50%, transparent calc(50% + 1px), transparent calc(75% - 1px), var(--line) 75%, transparent calc(75% + 1px)); }
     .now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); opacity: .75; z-index: 2; }
-    .job { position: absolute; top: 12px; min-width: 96px; height: 52px; border-radius: 7px; padding: 6px 8px; color: #fff; overflow: hidden; text-decoration: none; z-index: 3; }
+    .job { position: absolute; top: 12px; min-width: 0; height: 52px; border-radius: 7px; padding: 6px 8px; color: #fff; overflow: hidden; text-decoration: none; z-index: 3; }
     .job.active { background: var(--blue); }
     .job.forecast { background: var(--purple); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.15) 0 6px, transparent 6px 12px); }
+    .job.historical { background: #5d6b78; opacity: .86; }
     .job.unknown { background: var(--amber); }
     .job.blocked { background: var(--red); }
+    .job.highlight { outline: 3px solid var(--ink); box-shadow: 0 0 0 5px color-mix(in srgb, var(--purple) 45%, transparent); filter: brightness(1.12); z-index: 6; }
     .job-title { display: block; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
     .job-meta { display: block; font-size: 11px; opacity: .9; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
     .empty { padding: 22px 16px; color: var(--muted); }
@@ -50,12 +57,15 @@
     .queue-list { display: grid; gap: 8px; }
     .queue-item { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--purple); border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; gap: 10px; color: var(--ink); text-decoration: none; }
     .queue-item:hover { border-color: var(--purple); }
+    .queue-item.highlight, .queue-item:focus-visible { border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--purple) 45%, transparent); }
     .queue-item.blocked { border-left-color: var(--red); }
     .queue-title { font-weight: 600; }
     .queue-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
     .queue-estimate { text-align: right; white-space: nowrap; font-size: 12px; }
+    .job-section { margin-top: 18px; }
+    .history-section .queue-item { border-left-color: var(--blue); }
     .error { color: var(--red); background: color-mix(in srgb, var(--red) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line)); padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; }
-    @media (max-width: 620px) { main { padding: 16px 10px 28px; } header { align-items: start; flex-direction: column; gap: 4px; } .refresh { text-align: left; } .stats { grid-template-columns: repeat(2, 1fr); } .stat { padding: 10px; } .stat-value { font-size: 20px; } .queue-item { display: block; } .queue-estimate { text-align: left; margin-top: 6px; } }
+    @media (max-width: 620px) { main { padding: 16px 10px 28px; } header { align-items: start; flex-direction: column; gap: 4px; } .refresh { text-align: left; } .stats { grid-template-columns: repeat(2, 1fr); } .stat { padding: 10px; } .stat-value { font-size: 20px; } .queue-item { display: block; } .queue-estimate { text-align: left; margin-top: 6px; } .timeline-toolbar { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
 <body>
@@ -72,14 +82,38 @@
     <div class="stat"><div class="stat-label">Oldest wait</div><div class="stat-value" id="oldest">—</div></div>
   </section>
   <section class="board" aria-label="Runner timeline"><div id="timeline"></div></section>
-  <section class="queue"><h2>Queue</h2><div class="queue-list" id="queue-list"></div></section>
+  <section class="job-section"><h2>Queue</h2><div class="queue-list" id="queue-list"></div></section>
+  <section class="job-section"><h2>Active</h2><div class="queue-list" id="active-list"></div></section>
+  <section class="job-section history-section"><h2>History · last 24 hours</h2><div class="queue-list" id="history-list"></div></section>
 </main>
 <script>
   const state = { data: null };
+  const TIMELINE_RANGES = [
+    {ms: 1 * 60 * 1000, label: "1 min"},
+    {ms: 2 * 60 * 1000, label: "2 min"},
+    {ms: 5 * 60 * 1000, label: "5 min"},
+    {ms: 10 * 60 * 1000, label: "10 min"},
+    {ms: 15 * 60 * 1000, label: "15 min"},
+    {ms: 30 * 60 * 1000, label: "30 min"},
+    {ms: 60 * 60 * 1000, label: "1 hour"},
+    {ms: 2 * 60 * 60 * 1000, label: "2 hours"},
+    {ms: 4 * 60 * 60 * 1000, label: "4 hours"},
+    {ms: 6 * 60 * 60 * 1000, label: "6 hours"},
+  ];
+  const DEFAULT_TIMELINE_RANGE_MS = 2 * 60 * 60 * 1000;
+  const MIN_TIMELINE_RANGE_MS = TIMELINE_RANGES[0].ms;
+  const MAX_TIMELINE_RANGE_MS = TIMELINE_RANGES[TIMELINE_RANGES.length - 1].ms;
+  const TIMELINE_HISTORY_MS = 24 * 60 * 60 * 1000;
+  const TIMELINE_FUTURE_MS = 6 * 60 * 60 * 1000;
+  const TIMELINE_DOMAIN_MS = TIMELINE_HISTORY_MS + TIMELINE_FUTURE_MS;
+  const TIMELINE_TRACK_WIDTH = 1200;
+  const timelineView = { rangeMs: DEFAULT_TIMELINE_RANGE_MS, centerMs: null, startMs: null, trackWidth: 0, initialized: false, settingScroll: false, userAdjusted: false };
   const $ = (id) => document.getElementById(id);
   const date = (value) => value ? new Date(value) : null;
   const minutes = (seconds) => { if (seconds == null) return "—"; if (seconds < 60) return `${Math.round(seconds)}s`; return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`; };
   const clock = (value) => value ? date(value).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "unknown";
+  const shortDate = (value) => value ? date(value).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "unknown";
+  const jobSource = (job) => job.pullRequestNumber ? `PR #${job.pullRequestNumber}${job.headBranch ? ` · ${job.headBranch}` : " · merged PR"}` : job.headBranch || job.runDisplayTitle || (job.event === "push" ? "default branch" : "unknown branch");
   const escapeHtml = (text) => String(text ?? "").replace(/[&<>'"]/g, (character) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[character]));
   const githubLink = (job) => job.htmlUrl ? ` href="${escapeHtml(job.htmlUrl)}" data-github-url="${escapeHtml(job.htmlUrl)}"` : "";
   function openGithub(event) {
@@ -92,73 +126,213 @@
     window.location.href = `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=https;package=com.github.android;S.browser_fallback_url=${fallback};end`;
   }
   document.addEventListener("click", openGithub);
-  function render(data) {
+  function render(data, followNow = !timelineView.initialized) {
     state.data = data;
-    const runners = data.runners || [], jobs = data.jobs || [];
-    const queued = jobs.filter((job) => !job.runner);
+    const runners = data.runners || [], jobs = data.jobs || [], history = data.history || [];
+    const queued = jobs.filter((job) => !job.runner && job.status !== "in_progress");
+    const active = jobs.filter((job) => job.runner || job.status === "in_progress");
     $("repository").textContent = data.repository || "GitHub Actions";
     $("online").textContent = runners.filter((runner) => runner.status === "online").length;
     $("busy").textContent = runners.filter((runner) => runner.busy).length;
     $("queued").textContent = queued.length;
     const oldest = queued.reduce((max, job) => Math.max(max, job.queueSeconds || 0), 0);
     $("oldest").textContent = oldest ? minutes(oldest) : "—";
-    const captured = date(data.capturedAt);
-    const stale = captured && Date.now() - captured.getTime() > 90 * 1000;
-    $("refresh").classList.toggle("stale", stale);
-    $("refresh").textContent = captured ? `Collected ${captured.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}${stale ? ` · stale ${minutes(Date.now() / 1000 - captured.getTime() / 1000)}` : " · updates in background"}` : "Collector has not completed yet";
+    updateRefresh(data);
     const error = data.collector?.error;
     $("error").hidden = !error;
     $("error").textContent = error ? `Collector warning: ${error}` : "";
-    renderTimeline(data);
+    renderTimeline(data, followNow);
     renderQueue(queued);
+    renderActive(active);
+    renderHistory(history);
+    bindJobHighlights();
   }
-  function renderTimeline(data) {
+  function updateRefresh(data) {
+    const captured = date(data.capturedAt);
+    const stale = captured && Date.now() - captured.getTime() > 90 * 1000;
+    $("refresh").classList.toggle("stale", stale);
+    $("refresh").textContent = captured ? `Collected ${captured.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}${stale ? ` · stale ${minutes(Date.now() / 1000 - captured.getTime() / 1000)}` : " · live updates enabled; updates in background"}` : "Collector has not completed yet";
+  }
+  function renderTimeline(data, followNow = true, recenter = false) {
     const now = Date.now();
-    const plannedStarts = (data.jobs || []).map((job) => date(job.runner ? job.startedAt : job.predictedStartAt)?.getTime()).filter(Number.isFinite);
-    const plannedEnds = (data.jobs || []).map((job) => date(job.predictedEndAt)?.getTime()).filter(Number.isFinite);
-    const start = Math.min(now - 15 * 60 * 1000, ...plannedStarts);
-    const end = plannedEnds.length ? Math.max(now, ...plannedEnds) : now + 15 * 60 * 1000;
-    const span = Math.max(15 * 60 * 1000, end - start);
-    const trackWidth = Math.max(600, Math.min(1800, span / 60000 * 8));
-    const pct = (value) => Math.max(0, Math.min(100, (value - start) / span * 100));
-    const ticks = Array.from({length: 5}, (_, index) => start + span * index / 4);
-    const jobsByLane = new Map((data.lanes || []).map((lane) => [lane.id, []]));
-    for (const job of data.jobs || []) jobsByLane.get(job.assignedRunner || "unassigned")?.push(job);
+    const previousWrap = $("timeline").querySelector(".timeline-wrap");
+    if (!followNow && !recenter && previousWrap && timelineView.initialized) syncTimelineCenter();
+    const currentJobs = data.jobs || [], historicalJobs = data.history || [];
+    if (followNow || !timelineView.centerMs) timelineView.centerMs = now;
+    const span = Math.max(MIN_TIMELINE_RANGE_MS, Math.min(MAX_TIMELINE_RANGE_MS, timelineView.rangeMs));
+    const start = now - TIMELINE_HISTORY_MS;
+    const end = now + TIMELINE_FUTURE_MS;
+    const domainSpan = TIMELINE_DOMAIN_MS;
+    const visibleTrackWidth = Math.max(320, (previousWrap?.clientWidth || $("timeline").clientWidth || TIMELINE_TRACK_WIDTH) - 156);
+    const trackWidth = Math.max(visibleTrackWidth, Math.round(visibleTrackWidth * domainSpan / span));
+    const minimumCenter = start + span / 2;
+    const maximumCenter = end - span / 2;
+    timelineView.centerMs = Math.max(minimumCenter, Math.min(maximumCenter, timelineView.centerMs));
+    const pct = (value) => Math.max(0, Math.min(100, (value - start) / domainSpan * 100));
+    const gridStep = timelineGridStep(span);
+    const ticks = [];
+    for (let tick = Math.ceil(start / gridStep) * gridStep; tick <= end; tick += gridStep) ticks.push(tick);
+    const jobsByLane = new Map((data.lanes || []).map((lane) => [String(lane.id), []]));
+    for (const job of [...historicalJobs, ...currentJobs]) {
+      const laneId = job.historical ? job.runnerId : (job.assignedRunnerId ??
+        (data.lanes || []).find((lane) => lane.label === (job.assignedRunner || job.runner))?.id ??
+        (typeof (job.assignedRunner || job.runner) === "string" && (job.assignedRunner || job.runner).startsWith("GitHub Actions ") ? "github-hosted" : null));
+      jobsByLane.get(String(laneId ?? "unassigned"))?.push(job);
+    }
     const tickMarkup = ticks.map((tick) => `<span class="tick" style="left:${pct(tick)}%">${new Date(tick).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>`).join("");
-    let markup = `<div class="timeline-wrap"><div class="timeline" style="--track-width:${trackWidth}px"><div class="axis"><div class="axis-label">Now ${clock(now)} · end ${clock(end)}</div><div class="axis-track">${tickMarkup}</div></div>`;
+    let markup = `<div class="timeline-toolbar"><span>Drag to pan · pinch or Ctrl/⌘+wheel to zoom · ${timelineGridLabel(gridStep)} grid</span><div class="timeline-controls"><button type="button" data-timeline-action="zoom-out" aria-label="Zoom out">−</button><span class="zoom-label">${timelineRangeLabel(span)}</span><button type="button" data-timeline-action="zoom-in" aria-label="Zoom in">+</button><button type="button" data-timeline-action="reset">Reset</button></div></div><div class="timeline-wrap"><div class="timeline" style="--track-width:${trackWidth}px"><div class="axis"><div class="axis-label">Now ${clock(now)}</div><div class="axis-track">${tickMarkup}</div></div>`;
     for (const lane of data.lanes || []) {
-      const runner = (data.runners || []).find((item) => item.name === lane.id);
-      const laneJobs = jobsByLane.get(lane.id) || [];
-      const status = runner ? (runner.status === "online" ? (runner.busy ? "busy" : "idle") : runner.status) : "waiting";
+      const runner = (data.runners || []).find((item) => String(item.id) === String(lane.runnerId));
+      const laneJobs = jobsByLane.get(String(lane.id)) || [];
+      const status = runner ? (runner.status === "online" ? (runner.busy ? "busy" : "idle") : runner.status) : (lane.historicalOnly ? "history" : "waiting");
       const statusClass = runner?.status === "online" ? "online" : "offline";
-      const blocks = laneJobs.map((job) => {
-        const startAt = date(job.runner ? job.startedAt : job.predictedStartAt)?.getTime();
-        const endAt = date(job.runner ? job.predictedEndAt : job.predictedEndAt)?.getTime() || (startAt ? startAt + 15 * 60 * 1000 : 0);
-        if (!startAt) return "";
-        const kind = job.predictionConfidence === "blocked" ? "blocked" : job.runner ? "active" : job.predictionConfidence === "unknown" ? "unknown" : "forecast";
-        const left = pct(startAt) / 100 * trackWidth;
-        const width = Math.max(96, (pct(endAt) - pct(startAt)) / 100 * trackWidth);
-        const detail = job.runner ? `${minutes(job.elapsedSeconds)} elapsed` : job.estimate?.sampleSize ? `p90 ${minutes(job.estimate.p90Seconds)}` : "default 15m estimate";
-        return `<a class="job ${kind}"${githubLink(job)} style="left:${left}px;width:${width}px" title="${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}"><span class="job-title">${escapeHtml(job.workflow)}</span><span class="job-meta">${escapeHtml(job.name)} · ${escapeHtml(detail)}</span></a>`;
+      const rowEnds = [];
+      const positionedJobs = laneJobs.map((job) => {
+        const startAt = date(job.historical ? job.startedAt : job.runner ? job.startedAt : job.predictedStartAt)?.getTime();
+        const endAt = date(job.historical ? job.completedAt : job.predictedEndAt)?.getTime() || (startAt ? startAt + 15 * 60 * 1000 : 0);
+        if (!startAt || endAt <= start || startAt >= end) return null;
+        let row = rowEnds.findIndex((rowEnd) => rowEnd <= startAt);
+        if (row < 0) row = rowEnds.length;
+        rowEnds[row] = endAt;
+        return { job, startAt, endAt, row };
+      }).filter(Boolean);
+      const blocks = positionedJobs.map(({job, startAt, endAt, row}) => {
+        const kind = job.historical ? "historical" : job.predictionConfidence === "blocked" ? "blocked" : job.runner ? "active" : job.predictionConfidence === "unknown" ? "unknown" : "forecast";
+        const left = pct(Math.max(startAt, start)) / 100 * trackWidth;
+        const width = Math.max(2, (pct(Math.min(endAt, end)) - pct(Math.max(startAt, start))) / 100 * trackWidth);
+        const detail = job.historical ? `${minutes(job.durationSeconds)} · completed ${shortDate(job.completedAt)}` : job.runner ? `${minutes(job.elapsedSeconds)} elapsed` : job.estimate?.sampleSize ? `p90 ${minutes(job.estimate.p90Seconds)}` : "default 15m estimate";
+        return `<a class="job ${kind}" data-job-id="${escapeHtml(job.id)}"${githubLink(job)} style="left:${left}px;top:${12 + row * 58}px;width:${width}px" title="${escapeHtml(job.workflow)} · ${escapeHtml(job.name)} · ${escapeHtml(job.assignedRunner || job.runner || "unknown runner")}"><span class="job-title">${escapeHtml(job.workflow)}</span><span class="job-meta">${escapeHtml(job.name)} · ${escapeHtml(detail)}</span></a>`;
       }).join("");
-      markup += `<div class="row"><div class="runner"><div class="runner-name">${escapeHtml(lane.label)}</div><div class="runner-status ${statusClass}">${escapeHtml(status)}</div></div><div class="track"><div class="now" style="left:${pct(now)}%" aria-hidden="true"></div>${blocks || "<div class=\"empty\">No active work</div>"}</div></div>`;
+      const trackHeight = Math.max(76, 24 + Math.max(1, rowEnds.length) * 58);
+      markup += `<div class="row"><div class="runner"><div class="runner-name">${escapeHtml(lane.label)}</div><div class="runner-status ${statusClass}">${escapeHtml(status)}</div></div><div class="track" style="height:${trackHeight}px"><div class="now" style="left:${pct(now)}%" aria-hidden="true"></div>${blocks || "<div class=\"empty\">No work in this window</div>"}</div></div>`;
     }
     if (!(data.lanes || []).length) markup += `<div class="empty">No runners returned yet.</div>`;
     markup += "</div></div>";
     $("timeline").innerHTML = markup;
     const timelineWrap = $("timeline").querySelector(".timeline-wrap");
+    timelineView.startMs = start;
+    timelineView.trackWidth = trackWidth;
+    timelineView.rangeMs = span;
+    timelineView.initialized = true;
+    timelineView.settingScroll = true;
+    const renderedVisibleTrackWidth = Math.max(0, timelineWrap.clientWidth - 156);
+    const centerOffset = ((timelineView.centerMs - start) / domainSpan) * trackWidth;
+    const targetScroll = centerOffset - renderedVisibleTrackWidth / 2;
+    const maximumScroll = Math.max(0, timelineWrap.scrollWidth - timelineWrap.clientWidth);
+    timelineWrap.scrollLeft = Math.max(0, Math.min(maximumScroll, targetScroll));
+    timelineView.settingScroll = false;
+    bindTimelineInteractions();
+  }
+  function timelineGridStep(span) {
+    if (span <= 2 * 60 * 1000) return 1 * 60 * 1000;
+    if (span <= 5 * 60 * 1000) return 1 * 60 * 1000;
+    if (span <= 10 * 60 * 1000) return 2 * 60 * 1000;
+    if (span <= 60 * 60 * 1000) return 5 * 60 * 1000;
+    if (span <= 2 * 60 * 60 * 1000) return 5 * 60 * 1000;
+    if (span <= 4 * 60 * 60 * 1000) return 10 * 60 * 1000;
+    return 15 * 60 * 1000;
+  }
+  function timelineGridLabel(step) {
+    if (step < 60 * 60 * 1000) return `${step / 60000} min`;
+    return step === 60 * 60 * 1000 ? "1 hour" : `${step / 3600000} hours`;
+  }
+  function timelineRangeLabel(span) {
+    return TIMELINE_RANGES.find((range) => range.ms === span)?.label || `${Math.round(span / 60000)} min`;
+  }
+  function syncTimelineCenter() {
+    const timelineWrap = $("timeline").querySelector(".timeline-wrap");
+    if (!timelineWrap || !timelineView.startMs || !timelineView.trackWidth) return;
     const visibleTrackWidth = Math.max(0, timelineWrap.clientWidth - 156);
-    const nowOffset = pct(now) / 100 * trackWidth;
-    timelineWrap.scrollLeft = Math.max(0, nowOffset - visibleTrackWidth * 0.35);
+    const centerOffset = timelineWrap.scrollLeft + visibleTrackWidth / 2;
+    timelineView.centerMs = timelineView.startMs + centerOffset / timelineView.trackWidth * TIMELINE_DOMAIN_MS;
+  }
+  function zoomTimeline(factor) {
+    if (!state.data) return;
+    const currentIndex = TIMELINE_RANGES.reduce((best, range, index) =>
+      Math.abs(range.ms - timelineView.rangeMs) < Math.abs(TIMELINE_RANGES[best].ms - timelineView.rangeMs) ? index : best, 0);
+    const nextIndex = factor === "in" ? Math.max(0, currentIndex - 1) : Math.min(TIMELINE_RANGES.length - 1, currentIndex + 1);
+    timelineView.rangeMs = TIMELINE_RANGES[nextIndex].ms;
+    timelineView.centerMs = Date.now();
+    timelineView.userAdjusted = true;
+    renderTimeline(state.data, false, true);
+  }
+  function resetTimeline() {
+    timelineView.rangeMs = DEFAULT_TIMELINE_RANGE_MS;
+    timelineView.centerMs = Date.now();
+    timelineView.userAdjusted = false;
+    renderTimeline(state.data, false, true);
+  }
+  function bindTimelineInteractions() {
+    const timelineWrap = $("timeline").querySelector(".timeline-wrap");
+    if (!timelineWrap) return;
+    timelineWrap.addEventListener("scroll", () => { if (!timelineView.settingScroll) { timelineView.userAdjusted = true; syncTimelineCenter(); } });
+    timelineWrap.addEventListener("wheel", (event) => {
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) return;
+      event.preventDefault();
+      zoomTimeline(event.deltaY > 0 ? "out" : "in");
+    }, {passive: false});
+    let dragging = false;
+    let lastX = 0;
+    timelineWrap.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest(".job, button")) return;
+      dragging = true;
+      lastX = event.clientX;
+      timelineWrap.setPointerCapture(event.pointerId);
+      timelineView.userAdjusted = true;
+    });
+    timelineWrap.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      timelineWrap.scrollLeft -= event.clientX - lastX;
+      lastX = event.clientX;
+    });
+    const stopDragging = () => { dragging = false; syncTimelineCenter(); };
+    timelineWrap.addEventListener("pointerup", stopDragging);
+    timelineWrap.addEventListener("pointercancel", stopDragging);
+    $("timeline").querySelectorAll("[data-timeline-action]").forEach((button) => button.addEventListener("click", () => {
+      if (button.dataset.timelineAction === "zoom-in") zoomTimeline("in");
+      else if (button.dataset.timelineAction === "zoom-out") zoomTimeline("out");
+      else resetTimeline();
+    }));
   }
   function renderQueue(jobs) {
     if (!jobs.length) { $("queue-list").innerHTML = "<div class=\"muted\">Nothing is waiting for a runner.</div>"; return; }
     $("queue-list").innerHTML = jobs.map((job) => {
       const blocked = job.predictionConfidence === "blocked";
       const estimate = blocked ? job.blockedReason : job.predictedStartAt ? `Likely start ${clock(job.predictedStartAt)}${job.estimate?.sampleSize ? ` · p90 ${minutes(job.estimate.p90Seconds)}` : " · no history"}` : job.queueReason || "Start unknown";
-      const source = job.pullRequestNumber ? `PR #${job.pullRequestNumber}` : job.headBranch || "unknown branch";
-      return `<a class="queue-item ${blocked ? "blocked" : ""}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · waiting ${minutes(job.queueSeconds)} · ${escapeHtml((job.labels || []).join(", ") || "runner labels unavailable")}</div></div><div class="queue-estimate">${escapeHtml(estimate)}</div></a>`;
+      const source = jobSource(job);
+      return `<a class="queue-item ${blocked ? "blocked" : ""}" data-job-id="${escapeHtml(job.id)}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · waiting ${minutes(job.queueSeconds)} · ${escapeHtml((job.labels || []).join(", ") || "runner labels unavailable")}</div></div><div class="queue-estimate">${escapeHtml(estimate)}</div></a>`;
     }).join("");
+  }
+  function renderActive(jobs) {
+    if (!jobs.length) { $("active-list").innerHTML = "<div class=\"muted\">No actions are currently running.</div>"; return; }
+    $("active-list").innerHTML = jobs.map((job) => {
+      const source = jobSource(job);
+      const runner = job.assignedRunner || job.runner || "github-hosted";
+      const started = job.startedAt ? `started ${shortDate(job.startedAt)}` : "starting";
+      const finish = job.predictedEndAt ? `expected finish ${clock(job.predictedEndAt)}` : "finish unknown";
+      return `<a class="queue-item" data-job-id="${escapeHtml(job.id)}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · ${escapeHtml(runner)} · ${escapeHtml(started)}</div></div><div class="queue-estimate">${escapeHtml(finish)}</div></a>`;
+    }).join("");
+  }
+  function renderHistory(jobs) {
+    if (!jobs.length) { $("history-list").innerHTML = "<div class=\"muted\">No completed actions in the last 24 hours.</div>"; return; }
+    $("history-list").innerHTML = jobs.slice().reverse().map((job) => {
+      const source = jobSource(job);
+      const runner = job.runner || "github-hosted";
+      const completed = job.completedAt ? `completed ${shortDate(job.completedAt)}` : "completion unknown";
+      return `<a class="queue-item" data-job-id="${escapeHtml(job.id)}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · ${escapeHtml(runner)} · ${escapeHtml(completed)}</div></div><div class="queue-estimate">${escapeHtml(minutes(job.durationSeconds))}</div></a>`;
+    }).join("");
+  }
+  function bindJobHighlights() {
+    const elements = [...document.querySelectorAll("[data-job-id]")];
+    const matching = (jobId) => elements.filter((element) => element.dataset.jobId === jobId);
+    const setHighlight = (jobId, highlighted) => matching(jobId).forEach((element) => element.classList.toggle("highlight", highlighted));
+    elements.forEach((element) => {
+      const jobId = element.dataset.jobId;
+      element.addEventListener("mouseenter", () => setHighlight(jobId, true));
+      element.addEventListener("mouseleave", () => setHighlight(jobId, false));
+      element.addEventListener("focus", () => setHighlight(jobId, true));
+      element.addEventListener("blur", () => setHighlight(jobId, false));
+    });
   }
   let refreshInFlight = false;
   async function load() {
@@ -183,6 +357,19 @@
   window.addEventListener("pageshow", load);
   load();
   setInterval(refreshWhenVisible, 15000);
+  setInterval(() => { if (state.data) { updateRefresh(state.data); renderTimeline(state.data, false); } }, 15000);
+  function connectEvents() {
+    if (!window.EventSource) return;
+    const events = new EventSource("/api/events");
+    events.onmessage = (event) => {
+      try { render(JSON.parse(event.data), false); } catch (error) { console.warn("Invalid board event", error); }
+    };
+    events.onerror = () => {
+      events.close();
+      setTimeout(connectEvents, 5000);
+    };
+  }
+  connectEvents();
 </script>
 </body>
 </html>
