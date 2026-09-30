@@ -27,6 +27,10 @@
     .timeline-controls button { border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); padding: 3px 8px; cursor: pointer; }
     .timeline-controls button:hover, .timeline-controls button:focus-visible { border-color: var(--purple); }
     .zoom-label { min-width: 58px; text-align: center; }
+    .legend { font-weight: 600; }
+    .legend.passed { color: var(--green); }
+    .legend.failed { color: var(--red); }
+    .legend.cancelled { color: var(--amber); }
     .timeline-wrap { overflow-x: auto; }
     .timeline { min-width: calc(156px + var(--track-width)); }
     .axis, .row { display: grid; grid-template-columns: 156px var(--track-width); }
@@ -47,6 +51,9 @@
     .job.active { background: var(--blue); }
     .job.forecast { background: var(--purple); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.15) 0 6px, transparent 6px 12px); }
     .job.historical { background: #5d6b78; opacity: .86; }
+    .job.historical.passed { background: var(--green); }
+    .job.historical.failed { background: var(--red); }
+    .job.historical.cancelled { background: var(--amber); }
     .job.unknown { background: var(--amber); }
     .job.blocked { background: var(--red); }
     .job.highlight { outline: 3px solid var(--ink); box-shadow: 0 0 0 5px color-mix(in srgb, var(--purple) 45%, transparent); filter: brightness(1.12); z-index: 6; }
@@ -64,6 +71,9 @@
     .queue-estimate { text-align: right; white-space: nowrap; font-size: 12px; }
     .job-section { margin-top: 18px; }
     .history-section .queue-item { border-left-color: var(--blue); }
+    .history-section .queue-item.passed { border-left-color: var(--green); }
+    .history-section .queue-item.failed { border-left-color: var(--red); }
+    .history-section .queue-item.cancelled { border-left-color: var(--amber); }
     .error { color: var(--red); background: color-mix(in srgb, var(--red) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line)); padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; }
     @media (max-width: 620px) { main { padding: 16px 10px 28px; } header { align-items: start; flex-direction: column; gap: 4px; } .refresh { text-align: left; } .stats { grid-template-columns: repeat(2, 1fr); } .stat { padding: 10px; } .stat-value { font-size: 20px; } .queue-item { display: block; } .queue-estimate { text-align: left; margin-top: 6px; } .timeline-toolbar { align-items: flex-start; flex-direction: column; } }
   </style>
@@ -126,6 +136,7 @@
   const clock = (value) => value ? date(value).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "unknown";
   const shortDate = (value) => value ? date(value).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "unknown";
   const jobSource = (job) => job.pullRequestNumber ? `PR #${job.pullRequestNumber}${job.headBranch ? ` · ${job.headBranch}` : " · merged PR"}` : job.headBranch || job.runDisplayTitle || (job.event === "push" ? "default branch" : "unknown branch");
+  const outcomeClass = (job) => job.conclusion === "success" ? "passed" : ["failure", "timed_out"].includes(job.conclusion) ? "failed" : job.conclusion === "cancelled" ? "cancelled" : "other";
   const escapeHtml = (text) => String(text ?? "").replace(/[&<>'"]/g, (character) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[character]));
   const githubLink = (job) => job.htmlUrl ? ` href="${escapeHtml(job.htmlUrl)}" data-github-url="${escapeHtml(job.htmlUrl)}"` : "";
   function openGithub(event) {
@@ -196,7 +207,7 @@
       jobsByLane.get(String(laneId ?? "unassigned"))?.push(job);
     }
     const tickMarkup = ticks.map((tick) => `<span class="tick" style="left:${pct(tick)}%">${new Date(tick).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>`).join("");
-    let markup = `<div class="timeline-toolbar"><span>Drag to pan · pinch or Ctrl/⌘+wheel to zoom · ${timelineGridLabel(gridStep)} grid</span><div class="timeline-controls"><button type="button" data-timeline-action="zoom-out" aria-label="Zoom out">−</button><span class="zoom-label">${timelineRangeLabel(span)}</span><button type="button" data-timeline-action="zoom-in" aria-label="Zoom in">+</button><button type="button" data-timeline-action="reset">Reset</button></div></div><div class="timeline-wrap"><div class="timeline" style="--track-width:${trackWidth}px"><div class="axis"><div class="axis-label">Now ${clock(now)}</div><div class="axis-track">${tickMarkup}</div></div>`;
+    let markup = `<div class="timeline-toolbar"><span>Drag to pan · pinch or Ctrl/⌘+wheel to zoom · ${timelineGridLabel(gridStep)} grid · <span class="legend passed">passed</span> <span class="legend failed">failed</span> <span class="legend cancelled">cancelled</span></span><div class="timeline-controls"><button type="button" data-timeline-action="zoom-out" aria-label="Zoom out">−</button><span class="zoom-label">${timelineRangeLabel(span)}</span><button type="button" data-timeline-action="zoom-in" aria-label="Zoom in">+</button><button type="button" data-timeline-action="reset">Reset</button></div></div><div class="timeline-wrap"><div class="timeline" style="--track-width:${trackWidth}px"><div class="axis"><div class="axis-label">Now ${clock(now)}</div><div class="axis-track">${tickMarkup}</div></div>`;
     for (const lane of data.lanes || []) {
       const runner = (data.runners || []).find((item) => String(item.id) === String(lane.runnerId));
       const laneJobs = jobsByLane.get(String(lane.id)) || [];
@@ -213,7 +224,7 @@
         return { job, startAt, endAt, row };
       }).filter(Boolean);
       const blocks = positionedJobs.map(({job, startAt, endAt, row}) => {
-        const kind = job.historical ? "historical" : job.predictionConfidence === "blocked" ? "blocked" : job.runner ? "active" : job.predictionConfidence === "unknown" ? "unknown" : "forecast";
+        const kind = job.historical ? `historical ${outcomeClass(job)}` : job.predictionConfidence === "blocked" ? "blocked" : job.runner ? "active" : job.predictionConfidence === "unknown" ? "unknown" : "forecast";
         const left = pct(Math.max(startAt, start)) / 100 * trackWidth;
         const width = Math.max(2, (pct(Math.min(endAt, end)) - pct(Math.max(startAt, start))) / 100 * trackWidth);
         const detail = job.historical ? `${minutes(job.durationSeconds)} · completed ${shortDate(job.completedAt)}` : job.runner ? `${minutes(job.elapsedSeconds)} elapsed` : job.estimate?.sampleSize ? `p90 ${minutes(job.estimate.p90Seconds)}` : "default 15m estimate";
@@ -335,7 +346,7 @@
       const source = jobSource(job);
       const runner = job.runner || "github-hosted";
       const completed = job.completedAt ? `completed ${shortDate(job.completedAt)}` : "completion unknown";
-      return `<a class="queue-item" data-job-id="${escapeHtml(job.id)}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · ${escapeHtml(runner)} · ${escapeHtml(completed)}</div></div><div class="queue-estimate">${escapeHtml(minutes(job.durationSeconds))}</div></a>`;
+      return `<a class="queue-item ${outcomeClass(job)}" data-job-id="${escapeHtml(job.id)}"${githubLink(job)}><div><div class="queue-title">${escapeHtml(job.workflow)} · ${escapeHtml(job.name)}</div><div class="queue-meta">${escapeHtml(source)} · ${escapeHtml(runner)} · ${escapeHtml(completed)}</div></div><div class="queue-estimate">${escapeHtml(minutes(job.durationSeconds))}</div></a>`;
     }).join("");
   }
   let jobHighlightsBound = false;
