@@ -80,6 +80,7 @@ Other service managers can run the equivalent `runner-board serve` command.
 - active, queued, pending and waiting jobs;
 - queued, active and completed-action sections;
 - per-runner timeline with a live current-time marker, a 5-minute default grid, round zoom ranges from 1 minute to 6 hours, and a scrollable 24-hour history window;
+- optional timeline gap squashing that compresses empty periods of 30 minutes or more into marked gaps while preserving job durations;
 - one consolidated `github-hosted` timeline row for GitHub-hosted workflows;
 - completed jobs mapped to runner-name rows for the previous 24 hours;
 - branch and pull-request context with GitHub links;

@@ -38,6 +38,7 @@
     .axis-label { position: sticky; left: 0; z-index: 5; background: var(--surface); padding: 10px 12px; }
     .axis-track { position: relative; height: 34px; }
     .tick { position: absolute; top: 8px; transform: translateX(-50%); white-space: nowrap; }
+    .gap-marker { position: absolute; top: 6px; transform: translateX(-50%); color: var(--muted); font-weight: 600; letter-spacing: 1px; }
     .row { min-height: 76px; border-bottom: 1px solid var(--line); }
     .row:last-child { border-bottom: 0; }
     .runner { position: sticky; left: 0; z-index: 4; background: var(--surface); padding: 12px; border-right: 1px solid var(--line); }
@@ -118,9 +119,10 @@
   const MAX_TIMELINE_RANGE_MS = TIMELINE_RANGES[TIMELINE_RANGES.length - 1].ms;
   const TIMELINE_HISTORY_MS = 24 * 60 * 60 * 1000;
   const TIMELINE_FUTURE_MS = 6 * 60 * 60 * 1000;
-  const TIMELINE_DOMAIN_MS = TIMELINE_HISTORY_MS + TIMELINE_FUTURE_MS;
+  const GAP_SQUASH_THRESHOLD_MS = 30 * 60 * 1000;
+  const GAP_SQUASH_DISPLAY_MS = 5 * 60 * 1000;
   const TIMELINE_TRACK_WIDTH = 1200;
-  const timelineView = { rangeMs: DEFAULT_TIMELINE_RANGE_MS, centerMs: null, startMs: null, trackWidth: 0, initialized: false, settingScroll: false, userAdjusted: false };
+  const timelineView = { rangeMs: DEFAULT_TIMELINE_RANGE_MS, centerMs: null, startMs: null, trackWidth: 0, pixelsPerMs: 0, timeScale: null, squashGaps: false, initialized: false, settingScroll: false, userAdjusted: false };
   const $ = (id) => document.getElementById(id);
   const date = (value) => value ? new Date(value) : null;
   const minutes = (seconds) => { if (seconds == null) return "—"; if (seconds < 60) return `${Math.round(seconds)}s`; return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`; };
@@ -180,6 +182,63 @@
     $("refresh").classList.toggle("stale", stale);
     $("refresh").textContent = captured ? `Collected ${captured.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}${stale ? ` · stale ${minutes(Date.now() / 1000 - captured.getTime() / 1000)}` : " · live updates enabled; updates in background"}` : "Collector has not completed yet";
   }
+  function timelineJobRange(job) {
+    const startAt = date(job.historical ? job.startedAt : job.runner ? job.startedAt : job.predictedStartAt)?.getTime();
+    const endAt = date(job.historical ? job.completedAt : job.predictedEndAt)?.getTime() || (startAt ? startAt + 15 * 60 * 1000 : 0);
+    return startAt && endAt > startAt ? {startAt, endAt} : null;
+  }
+  function createTimelineScale(start, end, ranges, squashGaps) {
+    const intervals = ranges
+      .map((range) => ({start: Math.max(start, range.startAt), end: Math.min(end, range.endAt)}))
+      .filter((range) => range.end > range.start)
+      .sort((left, right) => left.start - right.start);
+    const merged = [];
+    for (const interval of intervals) {
+      const previous = merged[merged.length - 1];
+      if (previous && interval.start <= previous.end) previous.end = Math.max(previous.end, interval.end);
+      else merged.push({...interval});
+    }
+    const segments = [];
+    const squashedGaps = [];
+    let cursor = start;
+    const addGap = (gapStart, gapEnd) => {
+      const duration = gapEnd - gapStart;
+      const displayMs = squashGaps && duration >= GAP_SQUASH_THRESHOLD_MS ? GAP_SQUASH_DISPLAY_MS : duration;
+      segments.push({start: gapStart, end: gapEnd, displayMs, squashed: displayMs !== duration});
+      if (displayMs !== duration) squashedGaps.push({start: gapStart, end: gapEnd});
+    };
+    for (const interval of merged) {
+      if (interval.start > cursor) addGap(cursor, interval.start);
+      segments.push({start: interval.start, end: interval.end, displayMs: interval.end - interval.start, squashed: false});
+      cursor = interval.end;
+    }
+    if (cursor < end) addGap(cursor, end);
+    if (!segments.length) addGap(start, end);
+    const effectiveSpan = segments.reduce((total, segment) => total + segment.displayMs, 0);
+    function offsetFor(value) {
+      const clamped = Math.max(start, Math.min(end, value));
+      let offset = 0;
+      for (const segment of segments) {
+        if (clamped <= segment.start) return offset;
+        if (clamped < segment.end) return offset + (clamped - segment.start) / (segment.end - segment.start) * segment.displayMs;
+        offset += segment.displayMs;
+      }
+      return effectiveSpan;
+    }
+    function timeForOffset(value) {
+      const clamped = Math.max(0, Math.min(effectiveSpan, value));
+      let offset = 0;
+      for (const segment of segments) {
+        if (clamped <= offset + segment.displayMs) {
+          return segment.start + (clamped - offset) / segment.displayMs * (segment.end - segment.start);
+        }
+        offset += segment.displayMs;
+      }
+      return end;
+    }
+    const isSquashedInterior = (value) => squashedGaps.some((gap) => value > gap.start && value < gap.end);
+    return {effectiveSpan, squashedGaps, offsetFor, timeForOffset, isSquashedInterior};
+  }
   function renderTimeline(data, followNow = true, recenter = false) {
     const now = Date.now();
     const previousWrap = $("timeline").querySelector(".timeline-wrap");
@@ -189,16 +248,20 @@
     const span = Math.max(MIN_TIMELINE_RANGE_MS, Math.min(MAX_TIMELINE_RANGE_MS, timelineView.rangeMs));
     const start = now - TIMELINE_HISTORY_MS;
     const end = now + TIMELINE_FUTURE_MS;
-    const domainSpan = TIMELINE_DOMAIN_MS;
     const visibleTrackWidth = Math.max(320, (previousWrap?.clientWidth || $("timeline").clientWidth || TIMELINE_TRACK_WIDTH) - 156);
-    const trackWidth = Math.max(visibleTrackWidth, Math.round(visibleTrackWidth * domainSpan / span));
+    const timeRanges = [...historicalJobs, ...currentJobs].map(timelineJobRange).filter(Boolean);
+    const timeScale = createTimelineScale(start, end, timeRanges, timelineView.squashGaps);
+    const pixelsPerMs = visibleTrackWidth / Math.min(span, timeScale.effectiveSpan);
+    const trackWidth = Math.max(visibleTrackWidth, Math.round(timeScale.effectiveSpan * pixelsPerMs));
     const minimumCenter = start + span / 2;
     const maximumCenter = end - span / 2;
     timelineView.centerMs = Math.max(minimumCenter, Math.min(maximumCenter, timelineView.centerMs));
-    const pct = (value) => Math.max(0, Math.min(100, (value - start) / domainSpan * 100));
+    const offset = (value) => timeScale.offsetFor(value) * pixelsPerMs;
+    const pct = (value) => Math.max(0, Math.min(100, offset(value) / trackWidth * 100));
     const gridStep = timelineGridStep(span);
     const ticks = [];
     for (let tick = Math.ceil(start / gridStep) * gridStep; tick <= end; tick += gridStep) ticks.push(tick);
+    const visibleTicks = ticks.filter((tick) => !timeScale.isSquashedInterior(tick));
     const jobsByLane = new Map((data.lanes || []).map((lane) => [String(lane.id), []]));
     for (const job of [...historicalJobs, ...currentJobs]) {
       const laneId = job.historical ? job.runnerId : (job.assignedRunnerId ??
@@ -206,8 +269,9 @@
         (typeof (job.assignedRunner || job.runner) === "string" && (job.assignedRunner || job.runner).startsWith("GitHub Actions ") ? "github-hosted" : null));
       jobsByLane.get(String(laneId ?? "unassigned"))?.push(job);
     }
-    const tickMarkup = ticks.map((tick) => `<span class="tick" style="left:${pct(tick)}%">${new Date(tick).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>`).join("");
-    let markup = `<div class="timeline-toolbar"><span>Drag to pan · pinch or Ctrl/⌘+wheel to zoom · ${timelineGridLabel(gridStep)} grid · <span class="legend passed">passed</span> <span class="legend failed">failed</span> <span class="legend cancelled">cancelled</span></span><div class="timeline-controls"><button type="button" data-timeline-action="zoom-out" aria-label="Zoom out">−</button><span class="zoom-label">${timelineRangeLabel(span)}</span><button type="button" data-timeline-action="zoom-in" aria-label="Zoom in">+</button><button type="button" data-timeline-action="reset">Reset</button></div></div><div class="timeline-wrap"><div class="timeline" style="--track-width:${trackWidth}px"><div class="axis"><div class="axis-label">Now ${clock(now)}</div><div class="axis-track">${tickMarkup}</div></div>`;
+    const tickMarkup = visibleTicks.map((tick) => `<span class="tick" style="left:${pct(tick)}%">${new Date(tick).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>`).join("");
+    const gapMarkup = timeScale.squashedGaps.map((gap) => `<span class="gap-marker" style="left:${pct((gap.start + gap.end) / 2)}%" title="${escapeHtml(`${clock(gap.start)}–${clock(gap.end)} compressed`)}">…</span>`).join("");
+    let markup = `<div class="timeline-toolbar"><span>Drag to pan · pinch or Ctrl/⌘+wheel to zoom · ${timelineGridLabel(gridStep)} grid · <span class="legend passed">passed</span> <span class="legend failed">failed</span> <span class="legend cancelled">cancelled</span></span><div class="timeline-controls"><button type="button" data-timeline-action="zoom-out" aria-label="Zoom out">−</button><span class="zoom-label">${timelineRangeLabel(span)}</span><button type="button" data-timeline-action="zoom-in" aria-label="Zoom in">+</button><button type="button" data-timeline-action="toggle-gaps" aria-pressed="${timelineView.squashGaps}">${timelineView.squashGaps ? "Expand gaps" : "Squash ≥30m gaps"}</button><button type="button" data-timeline-action="reset">Reset</button></div></div><div class="timeline-wrap"><div class="timeline" style="--track-width:${trackWidth}px"><div class="axis"><div class="axis-label">Now ${clock(now)}</div><div class="axis-track">${tickMarkup}${gapMarkup}</div></div>`;
     for (const lane of data.lanes || []) {
       const runner = (data.runners || []).find((item) => String(item.id) === String(lane.runnerId));
       const laneJobs = jobsByLane.get(String(lane.id)) || [];
@@ -215,8 +279,9 @@
       const statusClass = runner?.status === "online" ? "online" : "offline";
       const rowEnds = [];
       const positionedJobs = laneJobs.map((job) => {
-        const startAt = date(job.historical ? job.startedAt : job.runner ? job.startedAt : job.predictedStartAt)?.getTime();
-        const endAt = date(job.historical ? job.completedAt : job.predictedEndAt)?.getTime() || (startAt ? startAt + 15 * 60 * 1000 : 0);
+        const timeRange = timelineJobRange(job);
+        const startAt = timeRange?.startAt;
+        const endAt = timeRange?.endAt || 0;
         if (!startAt || endAt <= start || startAt >= end) return null;
         let row = rowEnds.findIndex((rowEnd) => rowEnd <= startAt);
         if (row < 0) row = rowEnds.length;
@@ -225,8 +290,8 @@
       }).filter(Boolean);
       const blocks = positionedJobs.map(({job, startAt, endAt, row}) => {
         const kind = job.historical ? `historical ${outcomeClass(job)}` : job.predictionConfidence === "blocked" ? "blocked" : job.runner ? "active" : job.predictionConfidence === "unknown" ? "unknown" : "forecast";
-        const left = pct(Math.max(startAt, start)) / 100 * trackWidth;
-        const width = Math.max(2, (pct(Math.min(endAt, end)) - pct(Math.max(startAt, start))) / 100 * trackWidth);
+        const left = offset(Math.max(startAt, start));
+        const width = Math.max(2, offset(Math.min(endAt, end)) - left);
         const detail = job.historical ? `${minutes(job.durationSeconds)} · completed ${shortDate(job.completedAt)}` : job.runner ? `${minutes(job.elapsedSeconds)} elapsed` : job.estimate?.sampleSize ? `p90 ${minutes(job.estimate.p90Seconds)}` : "default 15m estimate";
         return `<a class="job ${kind}" data-job-id="${escapeHtml(job.id)}"${githubLink(job)} style="left:${left}px;top:${12 + row * 58}px;width:${width}px" title="${escapeHtml(job.workflow)} · ${escapeHtml(job.name)} · ${escapeHtml(job.assignedRunner || job.runner || "unknown runner")}"><span class="job-title">${escapeHtml(job.workflow)}</span><span class="job-meta">${escapeHtml(job.name)} · ${escapeHtml(detail)}</span></a>`;
       }).join("");
@@ -239,11 +304,13 @@
     const timelineWrap = $("timeline").querySelector(".timeline-wrap");
     timelineView.startMs = start;
     timelineView.trackWidth = trackWidth;
+    timelineView.pixelsPerMs = pixelsPerMs;
+    timelineView.timeScale = timeScale;
     timelineView.rangeMs = span;
     timelineView.initialized = true;
     timelineView.settingScroll = true;
     const renderedVisibleTrackWidth = Math.max(0, timelineWrap.clientWidth - 156);
-    const centerOffset = ((timelineView.centerMs - start) / domainSpan) * trackWidth;
+    const centerOffset = offset(timelineView.centerMs);
     const targetScroll = centerOffset - renderedVisibleTrackWidth / 2;
     const maximumScroll = Math.max(0, timelineWrap.scrollWidth - timelineWrap.clientWidth);
     timelineWrap.scrollLeft = Math.max(0, Math.min(maximumScroll, targetScroll));
@@ -268,10 +335,10 @@
   }
   function syncTimelineCenter() {
     const timelineWrap = $("timeline").querySelector(".timeline-wrap");
-    if (!timelineWrap || !timelineView.startMs || !timelineView.trackWidth) return;
+    if (!timelineWrap || !timelineView.startMs || !timelineView.timeScale || !timelineView.pixelsPerMs) return;
     const visibleTrackWidth = Math.max(0, timelineWrap.clientWidth - 156);
     const centerOffset = timelineWrap.scrollLeft + visibleTrackWidth / 2;
-    timelineView.centerMs = timelineView.startMs + centerOffset / timelineView.trackWidth * TIMELINE_DOMAIN_MS;
+    timelineView.centerMs = timelineView.timeScale.timeForOffset(centerOffset / timelineView.pixelsPerMs);
   }
   function zoomTimeline(factor) {
     if (!state.data) return;
@@ -318,6 +385,11 @@
     $("timeline").querySelectorAll("[data-timeline-action]").forEach((button) => button.addEventListener("click", () => {
       if (button.dataset.timelineAction === "zoom-in") zoomTimeline("in");
       else if (button.dataset.timelineAction === "zoom-out") zoomTimeline("out");
+      else if (button.dataset.timelineAction === "toggle-gaps") {
+        syncTimelineCenter();
+        timelineView.squashGaps = !timelineView.squashGaps;
+        renderTimeline(state.data, false, true);
+      }
       else resetTimeline();
     }));
   }
