@@ -44,8 +44,10 @@
     .runner { position: sticky; left: 0; z-index: 4; background: var(--surface); padding: 12px; border-right: 1px solid var(--line); }
     .runner-name { font-weight: 600; overflow-wrap: anywhere; }
     .runner-status { font-size: 12px; color: var(--muted); margin-top: 3px; }
-    .runner-status.online { color: var(--green); }
+    .runner-status.idle { color: var(--green); }
+    .runner-status.busy { color: var(--amber); }
     .runner-status.offline { color: var(--red); }
+    .runner-status.history, .runner-status.waiting { color: var(--muted); }
     .track { position: relative; min-height: 76px; background-image: linear-gradient(to right, transparent calc(25% - 1px), var(--line) 25%, transparent calc(25% + 1px), transparent calc(50% - 1px), var(--line) 50%, transparent calc(50% + 1px), transparent calc(75% - 1px), var(--line) 75%, transparent calc(75% + 1px)); }
     .now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--red); opacity: .75; z-index: 2; }
     .job { position: absolute; top: 12px; min-width: 0; height: 52px; border-radius: 7px; padding: 6px 8px; color: #fff; overflow: hidden; text-decoration: none; z-index: 3; }
@@ -90,7 +92,7 @@
     <div class="stat"><div class="stat-label">Runners online</div><div class="stat-value" id="online">—</div></div>
     <div class="stat"><div class="stat-label">Busy now</div><div class="stat-value" id="busy">—</div></div>
     <div class="stat"><div class="stat-label">Queued jobs</div><div class="stat-value" id="queued">—</div></div>
-    <div class="stat"><div class="stat-label">Oldest wait</div><div class="stat-value" id="oldest">—</div></div>
+    <div class="stat"><div class="stat-label">Oldest queue wait</div><div class="stat-value" id="oldest">—</div></div>
     <div class="stat"><div class="stat-label">Runs completed · 24h</div><div class="stat-value" id="completed-runs">—</div></div>
     <div class="stat"><div class="stat-label">Runner time · 24h</div><div class="stat-value" id="runner-time">—</div></div>
     <div class="stat"><div class="stat-label">Average duration · 24h</div><div class="stat-value" id="average-duration">—</div></div>
@@ -119,6 +121,7 @@
   const MAX_TIMELINE_RANGE_MS = TIMELINE_RANGES[TIMELINE_RANGES.length - 1].ms;
   const TIMELINE_HISTORY_MS = 24 * 60 * 60 * 1000;
   const TIMELINE_FUTURE_MS = 6 * 60 * 60 * 1000;
+  const WAITING_STATUSES = new Set(["queued", "waiting", "requested", "pending"]);
   const GAP_SQUASH_THRESHOLD_MS = 30 * 60 * 1000;
   const GAP_SQUASH_DISPLAY_MS = 5 * 60 * 1000;
   const TIMELINE_TRACK_WIDTH = 1200;
@@ -154,7 +157,7 @@
   function render(data, followNow = !timelineView.initialized) {
     state.data = data;
     const runners = data.runners || [], jobs = data.jobs || [], history = data.history || [];
-    const queued = jobs.filter((job) => !job.runner && job.status !== "in_progress");
+    const queued = jobs.filter((job) => !job.runner && WAITING_STATUSES.has(job.status));
     const active = jobs.filter((job) => job.runner || job.status === "in_progress");
     $("repository").textContent = data.repository || "GitHub Actions";
     $("online").textContent = runners.filter((runner) => runner.status === "online").length;
@@ -275,8 +278,9 @@
     for (const lane of data.lanes || []) {
       const runner = (data.runners || []).find((item) => String(item.id) === String(lane.runnerId));
       const laneJobs = jobsByLane.get(String(lane.id)) || [];
-      const status = runner ? (runner.status === "online" ? (runner.busy ? "busy" : "idle") : runner.status) : (lane.historicalOnly ? "history" : "waiting");
-      const statusClass = runner?.status === "online" ? "online" : "offline";
+      const virtualLane = lane.id === "github-hosted";
+      const status = virtualLane ? "" : runner ? (runner.status === "online" ? (runner.busy ? "busy" : "idle") : runner.status) : (lane.historicalOnly ? "history" : "waiting");
+      const statusClass = virtualLane ? "" : runner ? (runner.status === "online" ? (runner.busy ? "busy" : "idle") : "offline") : (lane.historicalOnly ? "history" : "waiting");
       const rowEnds = [];
       const positionedJobs = laneJobs.map((job) => {
         const timeRange = timelineJobRange(job);
@@ -296,7 +300,7 @@
         return `<a class="job ${kind}" data-job-id="${escapeHtml(job.id)}"${githubLink(job)} style="left:${left}px;top:${12 + row * 58}px;width:${width}px" title="${escapeHtml(job.workflow)} · ${escapeHtml(job.name)} · ${escapeHtml(job.assignedRunner || job.runner || "unknown runner")}"><span class="job-title">${escapeHtml(job.workflow)}</span><span class="job-meta">${escapeHtml(job.name)} · ${escapeHtml(detail)}</span></a>`;
       }).join("");
       const trackHeight = Math.max(76, 24 + Math.max(1, rowEnds.length) * 58);
-      markup += `<div class="row"><div class="runner"><div class="runner-name">${escapeHtml(lane.label)}</div><div class="runner-status ${statusClass}">${escapeHtml(status)}</div></div><div class="track" style="height:${trackHeight}px"><div class="now" style="left:${pct(now)}%" aria-hidden="true"></div>${blocks || "<div class=\"empty\">No work in this window</div>"}</div></div>`;
+      markup += `<div class="row"><div class="runner"><div class="runner-name">${escapeHtml(lane.label)}</div>${status ? `<div class="runner-status ${statusClass}">${escapeHtml(status)}</div>` : ""}</div><div class="track" style="height:${trackHeight}px"><div class="now" style="left:${pct(now)}%" aria-hidden="true"></div>${blocks || "<div class=\"empty\">No work in this window</div>"}</div></div>`;
     }
     if (!(data.lanes || []).length) markup += `<div class="empty">No runners returned yet.</div>`;
     markup += "</div></div>";
